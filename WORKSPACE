@@ -92,7 +92,7 @@ http_archive(
 new_local_repository(
     name = "glib_archive",
     build_file = "glib.BUILD",
-    path ="/usr/local/Cellar/glib/2.58.2",
+    path ="/usr/local/Cellar/glib/2.58.3",
 )
 
 new_local_repository(
@@ -104,5 +104,5 @@ new_local_repository(
 new_local_repository(
     name = "python_system",
     build_file = "python.BUILD",
-    path = "/Users/ThisCouldBeYou/homebrew/Cellar",
+    path = "/usr/local/Cellar",
 )
