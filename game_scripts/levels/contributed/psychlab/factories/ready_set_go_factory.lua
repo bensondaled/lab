@@ -26,12 +26,16 @@ local INTERFRAME_INTERVAL = 4 -- in REAL (Labyrinth) frames
 
 -- task params
 local TIME_TO_FIXATE_CROSS = 1 -- in frames
-local TIME_TO_FIXATE_TARGET = 1
-local INTERTRIAL_INTERVAL = 1
+local RSG_INTERVALS = {150,175,200}
+local INTERTRIAL_INTERVAL = 20
+local TOLERANCE = .200
 -- targets
-local N_POSITIONS = 8
+local N_POSITIONS = 4
 local TARGET_DISTANCE = .4
-local TARGET_SIZE = .05
+local TARGET_SIZE = .1
+local READY_COLOR = {255, 10, 10}
+local SET_COLOR = {255, 255, 10}
+local GO_COLOR = {10, 200, 10}
 -- rewards
 local FIXATION_REWARD = 0
 local CORRECT_REWARD = 1
@@ -72,7 +76,7 @@ function factory.createLevelApi(kwargs)
 
     self.targetPositions = {}
     for i = 1, N_POSITIONS do
-      local angle = (i-1) * math.pi / 4
+      local angle = (i-1) * math.pi / (N_POSITIONS/2)
       self.targetPositions[i] = {xLoc(angle), yLoc(angle)}
     end
 
@@ -88,83 +92,123 @@ function factory.createLevelApi(kwargs)
                                                              FIXATION_COLOR,
                                                              FIXATION_SIZE)
 
-    local h = BUTTON_SIZE * self.screenSize.height
-    local w = BUTTON_SIZE * self.screenSize.width
-
-    self.images.greenImage = tensor.ByteTensor(h, w, 3):fill{100, 255, 100}
-    self.images.redImage = tensor.ByteTensor(h, w, 3):fill{255, 100, 100}
-    self.images.blackImage = tensor.ByteTensor(h, w, 3)
-
   end
 
   -- trial methods --
+  
+  function env:preReadyPhase()
 
-  function env:readyPhase()
+    self._currentTrialStartTime = game:episodeTimeSeconds()
 
-    --[[ init trial by selecting a target location
-    self.currentTrial.goPosition,goIdx = psychlab_helpers.randomFrom(self.targetPositions)
+    -- determine interval timing for this trial
+    local interval, idx = psychlab_helpers.randomFrom(RSG_INTERVALS)
+    self._interval = interval
 
-    local readyIdx = goIdx - 1
-    if readyIdx < 1 then
-        readyIdx = N_POSITIONS - readyIdx
-    end
-    self.currentTrial.readyPosition = self.targetPositions[readyIdx]
-
-    local setIdx = readyIdx - 1
-    if setIdx < 1 then
-        setIdx = N_POSITIONS - setIdx
-    end
-    self.currentTrial.setPosition = self.targetPositions[setIdx]
-
-     self.pac:addWidget{
-         name = i,
-         image = arrow,
-         pos = self.arrowPositions[k],
-         size = {5,5},
-         mouseHoverCallback = self.correctResponseCallback,
-         imageLayer = 3,
-     }
+    -- determine "go" widget position, which will determine all others
+    local go_pos, idx = psychlab_helpers.randomFrom(self.targetPositions)
     
-    --
-    local upperLeftPosition = psychlab_helpers.getUpperLeftFromCenter(
-        CENTER,
-        ANIMATION_SIZE_AS_FRACTION_OF_SCREEN[1]
-    )
-
-    -- Display the first frame for the duration of the study interval
-    self.animation.currentFrame = self:renderFrame(
-        positions(1),
-        indicesToTrack,
-        self.images.studyCircle
-    )
+    -- add "go" widget
+    go = tensor.ByteTensor(self.screenSize.height*TARGET_SIZE, self.screenSize.width*TARGET_SIZE, 3):fill(GO_COLOR)
     self.pac:addWidget{
-        name = 'main_image',
-        image = self.animation.currentFrame,
-        pos = upperLeftPosition,
-        size = kwargs.animationSizeAsFractionOfScreen,
+        name = 'go',
+        image = go,
+        pos = go_pos,
+        size = {TARGET_SIZE,TARGET_SIZE},
+        mouseHoverCallback = self.goCallback,
     }
-    self.pac:updateWidget('main_image', self.animation.currentFrame)
+    
+    -- determine "ready" widget position based on "go" position
+    local ready_idx = idx - 2
+    if ready_idx < 1 then
+        ready_idx = ready_idx + N_POSITIONS
+    end
+    
+    -- start timer to trigger "ready" phase
     self.pac:addTimer{
-        name = 'study_interval',
-        timeout = kwargs.studyInterval,
-        callback = function(...) return self.trackingPhase(self,
-                                                           positions) end
+        name = 'ready_timer',
+        timeout = interval,
+        callback = function(...) return self.readyPhase(self, ready_idx, interval) end
     }
-    ]]
+
+
+  end
+
+  function env:readyPhase(idx, interval)
+
+    local ready_pos = self.targetPositions[idx]
+
+    -- add "ready" widget
+    ready = tensor.ByteTensor(self.screenSize.height*TARGET_SIZE, self.screenSize.width*TARGET_SIZE, 3):fill(READY_COLOR)
+    self.pac:addWidget{
+        name = 'ready',
+        image = ready,
+        pos = ready_pos,
+        size = {TARGET_SIZE,TARGET_SIZE},
+    }
+
+    -- determine "set" widget position based on "ready" position
+    local set_idx = idx + 1
+    if set_idx > N_POSITIONS then
+        set_idx = set_idx - N_POSITIONS
+    end
+    
+    -- start timer to trigger "set" phase
+    self.pac:addTimer{
+        name = 'set_timer',
+        timeout = interval,
+        callback = function(...) return self.setPhase(self, set_idx, interval) end
+    }
+
+  end
+
+  function env:setPhase(idx, interval)
+      
+    -- remove "ready" widget
+    self.pac:removeWidget('ready')
+
+    local pos = self.targetPositions[idx]
+
+      -- add "set" widget
+    set = tensor.ByteTensor(self.screenSize.height*TARGET_SIZE, self.screenSize.width*TARGET_SIZE, 3):fill(SET_COLOR)
+    self.pac:addWidget{
+        name = 'set',
+        image = set,
+        pos = pos,
+        size = {TARGET_SIZE,TARGET_SIZE},
+    }
+
+      -- start timer to trigger "go" phase
+    self.pac:addTimer{
+        name = 'go_timer',
+        timeout = interval,
+        callback = function(...) return self.goPhase(self) end
+    }
+
+  end
+  
+  function env:goPhase()
+    
+    self.goTime = game:episodeTimeSeconds()
+      
+    -- remove "set" widget
+    self.pac:removeWidget('set')
+    
   end
 
   function env:finishTrial(delay)
+    self.pac:removeWidget('go')
+
     self._stepsSinceInteraction = 0
     self.currentTrial.blockId = self.blockId
     self.currentTrial.reactionTime =
         game:episodeTimeSeconds() - self._currentTrialStartTime
 
     -- Convert radians to degrees before logging
-    self.currentTrial.targetDirection =
-      math.floor(self.currentTrial.targetDirection * (180 / math.pi) + 0.5)
     psychlab_helpers.publishTrialData(self.currentTrial, kwargs.schema)
     psychlab_helpers.finishTrialCommon(self, delay, FIXATION_SIZE)
   end
+
+  -- callbacks --
 
   function env:fixationCallback(name, mousePos, hoverTime, userData)
     if hoverTime == TIME_TO_FIXATE_CROSS then
@@ -173,14 +217,11 @@ function factory.createLevelApi(kwargs)
       self.pac:removeWidget('fixation')
       self.pac:removeWidget('center_of_fixation')
     
-      self._currentTrialStartTime = game:episodeTimeSeconds()
       self.currentTrial.stepCount = 0
 
-      self:readyPhase()
+      self:preReadyPhase()
     end
   end
-
-  -- callbacks --
 
   function env:step(lookingAtScreen)
     -- auto-called at each tick; increment counter to allow measurement of reaction times in steps
@@ -198,13 +239,27 @@ function factory.createLevelApi(kwargs)
     --end
   end
 
-  function env:correctResponseCallback(name, mousePos, hoverTime, userData)
-    if hoverTime == TIME_TO_FIXATE_TARGET then
+  function env:goCallback(name, mousePos, hoverTime, userData)
+        
+      --TODO: elapsed is currently in seconds but interval is in frames, so comparison cannot be made without a conversion
+      ---- (therefore will always be an incorrect trial until this is solved)
+      
+      local elapsed = game:episodeTimeSeconds() - self.goTime
+      local dif = math.abs(elapsed - self._interval)
+
       self.currentTrial.response = name
-      self.currentTrial.correct = 1
-      self.pac:addReward(CORRECT_REWARD)
+    
+      if dif < TOLERANCE then
+          self.currentTrial.correct = 1
+          self.pac:addReward(CORRECT_REWARD)
+          log.info('+1 reward')
+     else
+          self.currentTrial.correct = 0
+          self.pac:addReward(INCORRECT_REWARD)
+          log.info('no reward')
+      end
+      
       self:finishTrial(INTERTRIAL_INTERVAL)
-    end
   end
 
   -- helpers --
