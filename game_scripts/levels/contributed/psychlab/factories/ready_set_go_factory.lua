@@ -18,7 +18,7 @@ local GAUSSIAN_MASK_SIGMA = 0.15
 local ANIMATION_SIZE_AS_FRACTION_OF_SCREEN = {0.8, 0.8}
 local SCREEN_SIZE = {width = 512, height = 512}
 local FIXATION_SIZE = 0.1
-local FIXATION_COLOR = {255, 0, 0} -- RGB
+local FIXATION_COLOR = {50,50,50}
 local BUTTON_SIZE = 0.1
 local BG_COLOR = 0
 local CENTER = {.5, .5}
@@ -26,9 +26,12 @@ local INTERFRAME_INTERVAL = 4 -- in REAL (Labyrinth) frames
 
 -- task params
 local TIME_TO_FIXATE_CROSS = 1 -- in frames
+local PRE_RSG_DELAYS = {50, 60, 70, 80, 90} -- "variable foreperiod" in paper
+local TARGET_DISPLAY_TIME = 100 -- 0.5 s in paper
 local RSG_INTERVALS = {150,175,200}
+local RSG_FLASH_DURATION = 20
 local INTERTRIAL_INTERVAL = 20
-local TOLERANCE = .200
+local TOLERANCE = 150
 -- targets
 local N_POSITIONS = 4
 local TARGET_DISTANCE = .4
@@ -60,9 +63,10 @@ function factory.createLevelApi(kwargs)
 
   function env:_init(pac, opts)
     self.screenSize = opts.screenSize
-    log.info('opts passed to _init:\n' .. helpers.tostring(opts))
+    --log.info('opts passed to _init:\n' .. helpers.tostring(opts))
 
     self._stepsSinceInteraction = 0
+    self._trialBegan = false
 
     self:setupImages()
     self:setupCoordinateBounds(CANVAS_SIZE, PRE_RENDER_MASK_SIZE)
@@ -88,10 +92,9 @@ function factory.createLevelApi(kwargs)
     self.images = {}
 
     self.images.fixation = psychlab_helpers.getFixationImage(self.screenSize,
-                                                             BG_COLOR,
-                                                             FIXATION_COLOR,
-                                                             FIXATION_SIZE)
-
+                                         BG_COLOR,
+                                         FIXATION_COLOR,
+                                         FIXATION_SIZE)
   end
 
   -- trial methods --
@@ -100,7 +103,10 @@ function factory.createLevelApi(kwargs)
 
     self._currentTrialStartTime = game:episodeTimeSeconds()
 
-    -- determine interval timing for this trial
+    -- determine pre-RSG interval timing for this trial
+    local predelay, idx = psychlab_helpers.randomFrom(PRE_RSG_DELAYS)
+    predelay = TARGET_DISPLAY_TIME + predelay
+    -- determine RSG interval timing for this trial
     local interval, idx = psychlab_helpers.randomFrom(RSG_INTERVALS)
     self._interval = interval
 
@@ -126,7 +132,7 @@ function factory.createLevelApi(kwargs)
     -- start timer to trigger "ready" phase
     self.pac:addTimer{
         name = 'ready_timer',
-        timeout = interval,
+        timeout = predelay,
         callback = function(...) return self.readyPhase(self, ready_idx, interval) end
     }
 
@@ -152,6 +158,13 @@ function factory.createLevelApi(kwargs)
         set_idx = set_idx - N_POSITIONS
     end
     
+    -- start timer to flash off "ready" symbol
+    self.pac:addTimer{
+        name = 'ready_off_timer',
+        timeout = RSG_FLASH_DURATION,
+        callback = function(...) return self.widgetOff(self, 'ready') end
+    }
+
     -- start timer to trigger "set" phase
     self.pac:addTimer{
         name = 'set_timer',
@@ -163,9 +176,6 @@ function factory.createLevelApi(kwargs)
 
   function env:setPhase(idx, interval)
       
-    -- remove "ready" widget
-    self.pac:removeWidget('ready')
-
     local pos = self.targetPositions[idx]
 
       -- add "set" widget
@@ -177,21 +187,33 @@ function factory.createLevelApi(kwargs)
         size = {TARGET_SIZE,TARGET_SIZE},
     }
 
+    -- start timer to flash off "set" symbol
+    self.pac:addTimer{
+        name = 'set_off_timer',
+        timeout = RSG_FLASH_DURATION,
+        callback = function(...) return self.widgetOff(self, 'set') end
+    }
+
       -- start timer to trigger "go" phase
     self.pac:addTimer{
         name = 'go_timer',
         timeout = interval,
         callback = function(...) return self.goPhase(self) end
     }
+    
+    --log.info('set at step:\n' .. helpers.tostring(self.pac:elapsedSteps()))
 
   end
   
   function env:goPhase()
+   
+    -- remove fixation cross
+    self.pac:removeWidget('fixation')
+    self.pac:removeWidget('center_of_fixation')
     
     self.goTime = game:episodeTimeSeconds()
-      
-    -- remove "set" widget
-    self.pac:removeWidget('set')
+    self.goTimeSteps = self.pac:elapsedSteps()
+    --log.info('go at step:\n' .. helpers.tostring(self.goTimeSteps))
     
   end
 
@@ -199,9 +221,12 @@ function factory.createLevelApi(kwargs)
     self.pac:removeWidget('go')
 
     self._stepsSinceInteraction = 0
+    self._trialBegan = false
     self.currentTrial.blockId = self.blockId
     self.currentTrial.reactionTime =
         game:episodeTimeSeconds() - self._currentTrialStartTime
+
+    self.pac:resetSteps()
 
     -- Convert radians to degrees before logging
     psychlab_helpers.publishTrialData(self.currentTrial, kwargs.schema)
@@ -211,15 +236,14 @@ function factory.createLevelApi(kwargs)
   -- callbacks --
 
   function env:fixationCallback(name, mousePos, hoverTime, userData)
-    if hoverTime == TIME_TO_FIXATE_CROSS then
-      self._stepsSinceInteraction = 0
-      self.pac:addReward(FIXATION_REWARD)
-      self.pac:removeWidget('fixation')
-      self.pac:removeWidget('center_of_fixation')
-    
-      self.currentTrial.stepCount = 0
+    if hoverTime == TIME_TO_FIXATE_CROSS and self._trialBegan ~= true then
+      
+          self:preReadyPhase()
+          self.currentTrial.stepCount = 0
+          self.pac:addReward(FIXATION_REWARD)
+          self._stepsSinceInteraction = 0
+          self._trialBegan = true
 
-      self:preReadyPhase()
     end
   end
 
@@ -244,12 +268,17 @@ function factory.createLevelApi(kwargs)
       --TODO: elapsed is currently in seconds but interval is in frames, so comparison cannot be made without a conversion
       ---- (therefore will always be an incorrect trial until this is solved)
       
-      local elapsed = game:episodeTimeSeconds() - self.goTime
-      local dif = math.abs(elapsed - self._interval)
+      --log.info('saccade at step:\n' .. helpers.tostring(self.pac:elapsedSteps()))
+      --local elapsed = game:episodeTimeSeconds() - self.goTime
+      local elapsed = self.pac:elapsedSteps() - self.goTimeSteps
+      local dif = elapsed - self._interval
+      local abs_dif = math.abs(dif)
 
       self.currentTrial.response = name
+          
+      --log.info('(produced - correct) interval in frames:\n' .. helpers.tostring(dif))
     
-      if dif < TOLERANCE then
+      if abs_dif < TOLERANCE then
           self.currentTrial.correct = 1
           self.pac:addReward(CORRECT_REWARD)
           log.info('+1 reward')
@@ -263,9 +292,15 @@ function factory.createLevelApi(kwargs)
   end
 
   -- helpers --
+  
+  function env:widgetOff(widget)
+      self.pac:removeWidget(widget)
+  end
     
   function env:removeArray()
     self.pac:removeWidget('main_image')
+    self.pac:removeWidget('fixation')
+    self.pac:removeWidget('center_of_fixation')
     self.pac:clearTimers()
   end
   
