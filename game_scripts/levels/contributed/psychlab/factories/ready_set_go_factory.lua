@@ -1,4 +1,7 @@
 --Ben Deverett 2019
+-- todo:
+-- determine mapping of frames to seconds, if needed
+-- violation if fixation is broken during R-S phases
 
 local game = require 'dmlab.system.game'
 local psychlab_factory = require 'factories.psychlab.factory'
@@ -25,14 +28,16 @@ local CENTER = {.5, .5}
 local INTERFRAME_INTERVAL = 4 -- in REAL (Labyrinth) frames
 
 -- task params
+-- durations
 local TIME_TO_FIXATE_CROSS = 1 -- in frames
 local PRE_RSG_DELAYS = {50, 60, 70, 80, 90} -- "variable foreperiod" in paper
 local TARGET_DISPLAY_TIME = 100 -- 0.5 s in paper
 local RSG_INTERVALS = {150,175,200}
 local RSG_FLASH_DURATION = 20
 local INTERTRIAL_INTERVAL = 20
-local TOLERANCE = 150
--- targets
+local BASE_TOLERANCE = 50
+local TOLERANCE_SCALING = 0.25 -- for expanding green band in fig 1c
+-- target aesthetics
 local N_POSITIONS = 4
 local TARGET_DISTANCE = .4
 local TARGET_SIZE = .1
@@ -162,7 +167,7 @@ function factory.createLevelApi(kwargs)
     self.pac:addTimer{
         name = 'ready_off_timer',
         timeout = RSG_FLASH_DURATION,
-        callback = function(...) return self.widgetOff(self, 'ready') end
+        callback = function(...) return self.widgetsOff(self, {'ready'}) end
     }
 
     -- start timer to trigger "set" phase
@@ -187,34 +192,16 @@ function factory.createLevelApi(kwargs)
         size = {TARGET_SIZE,TARGET_SIZE},
     }
 
-    -- start timer to flash off "set" symbol
+    -- start timer to flash off "set" symbol and fixation cross
     self.pac:addTimer{
         name = 'set_off_timer',
         timeout = RSG_FLASH_DURATION,
-        callback = function(...) return self.widgetOff(self, 'set') end
+        callback = function(...) return self.widgetsOff(self, {'set','fixation','center_of_fixation'}) end
     }
 
-      -- start timer to trigger "go" phase
-    self.pac:addTimer{
-        name = 'go_timer',
-        timeout = interval,
-        callback = function(...) return self.goPhase(self) end
-    }
-    
-    --log.info('set at step:\n' .. helpers.tostring(self.pac:elapsedSteps()))
-
-  end
-  
-  function env:goPhase()
-   
-    -- remove fixation cross
-    self.pac:removeWidget('fixation')
-    self.pac:removeWidget('center_of_fixation')
-    
+    -- now it's the go phase - i.e. we start timing from the onset of the "set" phase in order to measure the set-go interval
     self.goTime = game:episodeTimeSeconds()
     self.goTimeSteps = self.pac:elapsedSteps()
-    --log.info('go at step:\n' .. helpers.tostring(self.goTimeSteps))
-    
   end
 
   function env:finishTrial(delay)
@@ -265,9 +252,6 @@ function factory.createLevelApi(kwargs)
 
   function env:goCallback(name, mousePos, hoverTime, userData)
         
-      --TODO: elapsed is currently in seconds but interval is in frames, so comparison cannot be made without a conversion
-      ---- (therefore will always be an incorrect trial until this is solved)
-      
       --log.info('saccade at step:\n' .. helpers.tostring(self.pac:elapsedSteps()))
       --local elapsed = game:episodeTimeSeconds() - self.goTime
       local elapsed = self.pac:elapsedSteps() - self.goTimeSteps
@@ -277,8 +261,11 @@ function factory.createLevelApi(kwargs)
       self.currentTrial.response = name
           
       --log.info('(produced - correct) interval in frames:\n' .. helpers.tostring(dif))
+      --
     
-      if abs_dif < TOLERANCE then
+      local tolerance = BASE_TOLERANCE + TOLERANCE_SCALING * self._interval
+    
+      if abs_dif < tolerance then
           self.currentTrial.correct = 1
           self.pac:addReward(CORRECT_REWARD)
           log.info('+1 reward')
@@ -293,14 +280,19 @@ function factory.createLevelApi(kwargs)
 
   -- helpers --
   
-  function env:widgetOff(widget)
-      self.pac:removeWidget(widget)
+  function env:widgetsOff(widgets)
+    for i,w in ipairs(widgets) do
+      self.pac:removeWidget(w)
+  end
   end
     
   function env:removeArray()
     self.pac:removeWidget('main_image')
     self.pac:removeWidget('fixation')
     self.pac:removeWidget('center_of_fixation')
+    self.pac:removeWidget('ready')
+    self.pac:removeWidget('set')
+    self.pac:removeWidget('go')
     self.pac:clearTimers()
   end
   
@@ -387,7 +379,6 @@ function factory.createLevelApi(kwargs)
     envOpts = {
         environment = env, screenSize = SCREEN_SIZE
     },
-    episodeLengthSeconds = 150
   }
 end
 
