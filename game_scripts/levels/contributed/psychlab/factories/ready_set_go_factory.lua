@@ -346,7 +346,7 @@ function factory.createLevelApi(kwargs)
     self.gaussianMask = gaussian
   end
 
-  function env:renderFrame(coords) -- TODO: fill out this method
+  function env:renderFrame(coords) -- TODO: fill out this method with anything else needed
 
     -- coords is a tensor of size [numObjects, 2] describing the coordinates of
     -- each object in the next frame to be displayed after the current frame.
@@ -369,7 +369,7 @@ function factory.createLevelApi(kwargs)
     }
 
     -- render the next frame
-    self.animation.nextFrame = self:renderFrame(self.animation.state) -- TODO: give proper argument
+    self.animation.nextFrame = self:renderFrame()
     -- update the reference called currentFrame to point to the next tensor
     self.animation.currentFrame = self.animation.nextFrame
   end
