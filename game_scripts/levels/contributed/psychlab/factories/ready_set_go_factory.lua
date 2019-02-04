@@ -1,7 +1,6 @@
 --Ben Deverett 2019
 -- todo:
 -- determine mapping of frames to seconds, if needed
--- violation if fixation is broken during R-S phases
 
 local game = require 'dmlab.system.game'
 local psychlab_factory = require 'factories.psychlab.factory'
@@ -30,11 +29,12 @@ local INTERFRAME_INTERVAL = 4 -- in REAL (Labyrinth) frames
 -- task params
 -- durations
 local TIME_TO_FIXATE_CROSS = 1 -- in frames
+local FIXATION_BREAK_THRESH = 10
 local PRE_RSG_DELAYS = {50, 60, 70, 80, 90} -- "variable foreperiod" in paper
 local TARGET_DISPLAY_TIME = 100 -- 0.5 s in paper
 local RSG_INTERVALS = {150,175,200}
 local RSG_FLASH_DURATION = 20
-local INTERTRIAL_INTERVAL = 20
+local INTERTRIAL_INTERVAL = 60
 local BASE_TOLERANCE = 50
 local TOLERANCE_SCALING = 0.25 -- for expanding green band in fig 1c
 -- target aesthetics
@@ -72,6 +72,7 @@ function factory.createLevelApi(kwargs)
 
     self._stepsSinceInteraction = 0
     self._trialBegan = false
+    self._fixationBrokenFrames = 0
 
     self:setupImages()
     self:setupCoordinateBounds(CANVAS_SIZE, PRE_RENDER_MASK_SIZE)
@@ -91,15 +92,14 @@ function factory.createLevelApi(kwargs)
 
     -- point and click api
     self.pac = pac
+    
   end
   
   function env:setupImages()
     self.images = {}
 
     self.images.fixation = psychlab_helpers.getFixationImage(self.screenSize,
-                                         BG_COLOR,
-                                         FIXATION_COLOR,
-                                         FIXATION_SIZE)
+                 BG_COLOR, FIXATION_COLOR, FIXATION_SIZE)
   end
 
   -- trial methods --
@@ -200,14 +200,21 @@ function factory.createLevelApi(kwargs)
     }
 
     -- now it's the go phase - i.e. we start timing from the onset of the "set" phase in order to measure the set-go interval
+    self._fixationRequired = false
     self.goTime = game:episodeTimeSeconds()
     self.goTimeSteps = self.pac:elapsedSteps()
+  end
+
+  function env:fixationBroken()
+        self:removeArray()
+        self:finishTrial(INTERTRIAL_INTERVAL)
   end
 
   function env:finishTrial(delay)
     self.pac:removeWidget('go')
 
     self._stepsSinceInteraction = 0
+    self._fixationRequired = false
     self._trialBegan = false
     self.currentTrial.blockId = self.blockId
     self.currentTrial.reactionTime =
@@ -224,13 +231,17 @@ function factory.createLevelApi(kwargs)
 
   function env:fixationCallback(name, mousePos, hoverTime, userData)
     if hoverTime == TIME_TO_FIXATE_CROSS and self._trialBegan ~= true then
-      
           self:preReadyPhase()
           self.currentTrial.stepCount = 0
           self.pac:addReward(FIXATION_REWARD)
           self._stepsSinceInteraction = 0
+          self._fixationRequired = true
           self._trialBegan = true
+          self._fixationBrokenFrames = 0
+    end
 
+    if self._fixationRequired == true then
+        self._fixationBrokenFrames = 0
     end
   end
 
@@ -238,6 +249,13 @@ function factory.createLevelApi(kwargs)
     -- auto-called at each tick; increment counter to allow measurement of reaction times in steps
     if self.currentTrial.stepCount ~= nil then
       self.currentTrial.stepCount = self.currentTrial.stepCount + 1
+    end
+    
+    if self._fixationRequired == true then
+        if self._fixationBrokenFrames > FIXATION_BREAK_THRESH then
+            self:fixationBroken()
+        end
+        self._fixationBrokenFrames = self._fixationBrokenFrames + 1
     end
     
     -- TODO: include this feature if desired
@@ -301,6 +319,7 @@ function factory.createLevelApi(kwargs)
 
     self.pac:setBackgroundColor{BG_COLOR, BG_COLOR, BG_COLOR}
     self.pac:clearWidgets()
+    
     psychlab_helpers.addFixation(self, FIXATION_SIZE)
     self.reward = 0
     self:initAnimation(ANIMATION_SIZE_AS_FRACTION_OF_SCREEN)
