@@ -1,4 +1,6 @@
 --Ben Deverett 2019
+-- like Jayazeri 2015 RSG reproduction timing task: produce a Set-Go interval matched in duration to the presented Ready-Set interval
+
 -- todo:
 -- determine mapping of frames to seconds, if needed
 
@@ -222,7 +224,6 @@ function factory.createLevelApi(kwargs)
 
     self.pac:resetSteps()
 
-    -- Convert radians to degrees before logging
     psychlab_helpers.publishTrialData(self.currentTrial, kwargs.schema)
     psychlab_helpers.finishTrialCommon(self, delay, FIXATION_SIZE)
   end
