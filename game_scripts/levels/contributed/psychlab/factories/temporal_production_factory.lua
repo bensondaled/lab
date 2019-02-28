@@ -1,5 +1,6 @@
 --Ben Deverett 2019
 -- "click" the target twice with a specific temporal delay between clicks 1 and 2
+-- TODO: maybe an alternate version where the goal is to saccade to A then B over a precise temporal interval (as opposed to clicks)
 
 local game = require 'dmlab.system.game'
 local psychlab_factory = require 'factories.psychlab.factory'

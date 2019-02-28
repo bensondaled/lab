@@ -36,7 +36,8 @@ local TARGET_DURATIONS = {100, 400} -- in frames
 -- target aesthetics
 local TARGET_SIZE = .1
 local TARGET_LOCATION = {.5, .5} -- main central target
-local TARGET_DISTANCE = .4 -- saccade targets
+local TARGET_DISTANCE = .2 -- saccade targets
+local N_POSITIONS = 12
 local TARGET_COLORS = { {50,100,150}, {150,10,30} }
 -- rewards
 local FIXATION_REWARD = 0
@@ -77,9 +78,15 @@ function factory.createLevelApi(kwargs)
     local function yLoc(angle)
       return 1 - (CENTER[2] + (TARGET_DISTANCE * math.sin(angle)) + (TARGET_SIZE / 2))
     end
-    self.targetPosition0 = {xLoc(0), yLoc(0)}
-    self.targetPosition1 = {xLoc(math.pi), yLoc(math.pi)}
-    self.targetPositions = {self.targetPosition0, self.targetPosition1}
+
+    self.targetPositions = {}
+    for i = 1, N_POSITIONS do
+      local angle = (i-1) * math.pi / (N_POSITIONS)
+      self.targetPositions[i] = {xLoc(angle), yLoc(angle)}
+      targetPosition0 = {xLoc(angle), yLoc(angle)}
+      targetPosition1 = {xLoc(math.pi+angle), yLoc(math.pi+angle)}
+      self.targetPositions[i] = {targetPosition0, targetPosition1}
+    end
 
     -- point and click api
     self.pac = pac
@@ -144,8 +151,11 @@ function factory.createLevelApi(kwargs)
     posCorrectIdx = psychlab_helpers.randomFrom({0,1})
     posIncorrectIdx = -posCorrectIdx + 2
     posCorrectIdx = posCorrectIdx + 1
-    posCorrect = self.targetPositions[posCorrectIdx]
-    posIncorrect = self.targetPositions[posIncorrectIdx]
+
+    -- select the axis of positions for this trial
+    local tps = psychlab_helpers.randomFrom(self.targetPositions)
+    posCorrect = tps[posCorrectIdx]
+    posIncorrect = tps[posIncorrectIdx]
 
     self.pac:addWidget{
         name = 'target_correct',
